@@ -1,0 +1,129 @@
+#include <Wire.h>
+#include <MAX30100_PulseOximeter.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+#include <ESP8266WebServer.h>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
+#include <UbidotsESP8266.h>
+
+#define DHTPIN 4     // D2 pin on ESP8266
+#define DHTTYPE DHT11  // DHT11 sensor type
+
+#define WIFISSID "YourNetworkSSID"           // Replace with your Wi-Fi network SSID
+#define PASSWORD "YourNetworkPassword"       // Replace with your Wi-Fi network password
+#define TOKEN "YourUbidotsToken"             // Replace with your Ubidots token
+#define MQTT_CLIENT_NAME "YourClientName"    // Replace with your MQTT client name
+
+#define VARIABLE_LABEL "heartRate"   // Ubidots variable label for heart rate
+#define VARIABLE_LABEL_TEMP "temperature"  // Ubidots variable label for temperature
+#define VARIABLE_LABEL_HUM "humidity"   // Ubidots variable label for humidity
+#define VARIABLE_LABEL_SPO2 "spo2"   // Ubidots variable label for SpO2
+#define DEVICE_LABEL "esp8266"   // Ubidots device label
+
+const char* mqttBroker = "industrial.api.ubidots.com";
+char payload[100];
+char topic[150];
+
+DHT dht(DHTPIN, DHTTYPE);
+PulseOximeter pox;
+Ubidots ubidots(TOKEN);
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  // Callback function for MQTT messages
+  // You can add custom logic here if needed
+}
+
+void reconnect() {
+  // Reconnect to MQTT broker
+  while (!ubidots.connected()) {
+    Serial.println("Connecting to Ubidots...");
+    if (ubidots.connect()) {
+      Serial.println("Connected to Ubidots");
+    } else {
+      Serial.println("Failed to connect to Ubidots. Retrying in 2 seconds...");
+      delay(2000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  
+  WiFi.begin(WIFISSID, PASSWORD);
+  Serial.println();
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  Serial.println("");
+  Serial.print("Connected to ");
+  Serial.println(WIFISSID);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+  if (!pox.begin()) {
+    Serial.println("Failed to initialize Pulse Oximeter");
+    while (1);
+  }
+  
+  pox.setIRLedCurrent(MAX30100_LED_CURR_50MA);
+  pox.setSampleRate(MAX30100_SAMP_RATE_100HZ);
+  pox.setPulseAmplitudeRed(0x0A);
+  pox.setPulseAmplitudeIR(0x0A);
+  
+  ubidots.setDebug(false);
+  
+  reconnect();
+}
+
+void loop() {
+  if (!ubidots.connected()) {
+    reconnect();
+  }
+  
+  ubidots.loop();
+  
+  // Read temperature and humidity data
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
+
+  // Publish temperature to Ubidots
+  sprintf(topic, "/v1.6/devices/%s", DEVICE_LABEL);
+  sprintf(payload, "{\"%s\": %f}", VARIABLE_LABEL_TEMP, temperature);
+  ubidots.add(topic, payload);
+
+  // Publish humidity to Ubidots
+  sprintf(topic, "/v1.6/devices/%s", DEVICE_LABEL);
+  sprintf(payload, "{\"%s\": %f}", VARIABLE_LABEL_HUM, humidity);
+  ubidots.add(topic, payload);
+
+  // Update the pulse oximeter
+  pox.update();
+
+  // Check if a new reading is available
+  if (pox.available()) {
+    // Get the heart rate and SpO2 readings
+    float heartRate = pox.getHeartRate();
+    float spo2 = pox.getSpO2();
+
+    // Publish heart rate to Ubidots
+    sprintf(topic, "/v1.6/devices/%s", DEVICE_LABEL);
+    sprintf(payload, "{\"%s\": %f}", VARIABLE_LABEL, heartRate);
+    ubidots.add(topic, payload);
+
+    // Publish SpO2 to Ubidots
+    sprintf(topic, "/v1.6/devices/%s", DEVICE_LABEL);
+    sprintf(payload, "{\"%s\": %f}", VARIABLE_LABEL_SPO2, spo2);
+    ubidots.add(topic, payload);
+
+    // Send data to Ubidots
+    ubidots.sendAll();
+  }
+
+  delay(1000);
+}
